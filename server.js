@@ -16,10 +16,13 @@ const MODES=[{k:'1v1',n:2,teams:2},{k:'2v2',n:4,teams:2},{k:'4v4',n:8,teams:2},{
 const ITEMS=[
  {k:'spd',n:'Speed',c:'#3aa0ff',d:60},{k:'shd',n:'Shield',c:'#ffc83a',d:60},{k:'rate',n:'Rapid fire',c:'#ff6a3d',d:60},
  {k:'regen',n:'Repair',c:'#7dff4a',d:30},{k:'lock',n:'Target lock',c:'#ff2e88',d:30},
- {k:'mine',n:'Landmine',c:'#ff4a2a',d:0},{k:'slow',n:'Slow trap',c:'#8a6bff',d:8},{k:'poison',n:'Poison trap',c:'#b6ff3a',d:8},{k:'smoke',n:'Smoke trap',c:'#c4ccd8',d:30}];
-const FXK=['spd','shd','rate','regen','lock','slow','poison','smoke']; // flag bit i; bit 8 = spawn shield
-const FL_INV=256;
-const EVN=['sp2','sp','wl','cr','cb','rs','ht','sd','xp','kl','pk','dp','tg','mb','hl'],EVI={};
+ {k:'mine',n:'Landmine',c:'#ff4a2a',d:0},{k:'slow',n:'Slow trap',c:'#8a6bff',d:8},{k:'poison',n:'Poison trap',c:'#b6ff3a',d:8},{k:'smoke',n:'Smoke trap',c:'#c4ccd8',d:30},
+ {k:'spread',n:'Triple shot',c:'#ffe94a',d:30},{k:'bounce',n:'Ricochet',c:'#3affd0',d:30},{k:'pierce',n:'Railgun',c:'#e8f4ff',d:30},
+ {k:'cloak',n:'Stealth',c:'#9aa8ff',d:20},{k:'emp',n:'EMP blast',c:'#5ad1ff',d:3},{k:'vamp',n:'Vampire',c:'#ff3d6e',d:30},{k:'jam',n:'Jammed',c:'#5ad1ff',d:3}];
+const PERKS=[0,1,2,3,4,9,10,11,12,13,14],isPerk=ty=>ty<5||ty>=9; // 9-14 personal perks (13 = instant EMP), 15 = jam debuff only
+const FXK=['spd','shd','rate','regen','lock','slow','poison','smoke','spread','bounce','pierce','cloak','vamp','jam']; // flag bit i; bit 14 = spawn shield
+const FL_INV=16384;
+const EVN=['sp2','sp','wl','cr','cb','rs','ht','sd','xp','kl','pk','dp','tg','mb','hl','em'],EVI={};
 for(let i=0;i<EVN.length;i++)EVI[EVN[i]]=i;
 const cleanName=n=>String(n||'').toUpperCase().replace(/[^A-Z0-9 _-]/g,'').trim().slice(0,10)||'PILOT';
 const fxMul=t=>(t.fx.spd>0?1.4:1)*(t.fx.slow>0?.5:1);
@@ -99,7 +102,7 @@ function Arena(){
      l|text                       lobby notice for one player
    CLIENT -> SERVER
      i|m,a,b,aim*1000,fire,dp     input. m=0 keys: a=thrust b=turn (-1..1).  m=1 stick: a,b = move vector *100
-     p|ts  ping    m|mode  b add bot   r|slot remove   t|slot switch team   s start   v|1 rematch  v|2 back to room */
+     p|ts  ping    m|mode  b add bot   r|slot remove   t|slot switch team   s start   v|1 rematch  v|2 back to room   q|n team emote (0-5) */
 function Engine(io){
   const A=Arena(),grid=A.grid,chp=A.chp,R=Math.round;
   const solidAt=A.solidAt,collideTank=A.collideTank,moveTank=A.moveTank;
@@ -130,7 +133,7 @@ function Engine(io){
   function makeTank(slot,name,team,bot,cid){
     const c=cid?clients.get(cid):null;
     return{slot,name,team,bot,cid,x:0,y:0,a:0,ta:0,v:0,hp:MAXHP,alive:false,respawnT:0,cd:0,inv:0,kills:0,deaths:0,
-      fx:{spd:0,shd:0,rate:0,regen:0,lock:0,slow:0,poison:0,smoke:0},regenLeft:0,regenT:0,poisonT:0,lockTgt:null,traps:[],dpSeen:c?c.inp.dp:0,
+      fx:{spd:0,shd:0,rate:0,regen:0,lock:0,slow:0,poison:0,smoke:0,spread:0,bounce:0,pierce:0,cloak:0,vamp:0,jam:0},regenLeft:0,regenT:0,poisonT:0,lockTgt:null,traps:[],dpSeen:c?c.inp.dp:0,
       inp:newInp(),brain:null};
   }
   const flagsOf=t=>{let f=0;for(let i=0;i<FXK.length;i++)if(t.fx[FXK[i]]>0)f|=1<<i;if(t.inv>0)f|=FL_INV;return f};
@@ -162,6 +165,7 @@ function Engine(io){
     if(t.inv>0){emit('sd',x,y,a,t.slot,bid);return}
     if(t.fx.shd>0)units=Math.max(1,Math.ceil(units/2));
     t.hp-=units;emit('ht',x,y,a,t.slot,bid);
+    if(kind===0&&by&&by.alive&&by.fx.vamp>0&&by.hp<MAXHP){by.hp++;emit('hl',by.x,by.y,0,by.slot)}
     if(t.hp<=0)killTank(t,by,kind);
   }
 
@@ -172,15 +176,22 @@ function Engine(io){
       const c=mc[(Math.random()*mc.length)|0];if(grid[c])continue;
       const x=(c%N+.5)*T,y=(((c/N)|0)+.5)*T;
       if(items.some(i=>Math.hypot(i.x-x,i.y-y)<140))continue;
-      items.push({id:nextId++,type:Math.random()<.55?(Math.random()*5|0):5+(Math.random()*4|0),x,y});return;
+      items.push({id:nextId++,type:Math.random()<.6?PERKS[(Math.random()*PERKS.length)|0]:5+(Math.random()*4|0),x,y});return;
     }
   }
   function applyPerk(t,type){
     const it=ITEMS[type];
     if(type===4){t.fx.lock=it.d;t.lockTgt=null;return}
+    if(type===13){emp(t);return}
+    if(type>=9){t.fx[it.k]=it.d;return}
     for(const o of tanks)if(o.alive&&o.team===t.team){
       if(type===3){o.fx.regen=it.d;o.regenLeft=4;o.regenT=7.5}else o.fx[it.k]=it.d;
     }
+  }
+  function emp(t){
+    emit('em',t.x,t.y,0,t.slot);
+    for(const o of tanks)if(o.alive&&o.team!==t.team&&Math.hypot(o.x-t.x,o.y-t.y)<520)o.fx.jam=3;
+    for(let i=traps.length-1;i>=0;i--){const tr=traps[i];if(tr.team===t.team||Math.hypot(tr.x-t.x,tr.y-t.y)>=520)continue;if(ITEMS[tr.type].k==='mine')emit('mb',tr.x,tr.y);traps.splice(i,1)}
   }
   function deployTrap(t){
     const type=t.traps.shift();let x=t.x-Math.cos(t.a)*40,y=t.y-Math.sin(t.a)*40;
@@ -204,30 +215,43 @@ function Engine(io){
   }
 
   /* ---- bullets ---- */
+  function hitCrate(k,cx,cy,x,y,a,id){
+    chp[k]--;emit('cr',x,y,a,id);
+    if(chp[k]<=0){grid[k]=0;broken.push({x:cx,y:cy,t:25});emit('cb',(cx+.5)*T,(cy+.5)*T)}
+    crD.push(k);
+  }
   function moveBullet(b,dist){
     const n=Math.ceil(dist/8),sd=dist/n;
     for(let i=0;i<n;i++){
       b.x+=b.dx*sd;b.y+=b.dy*sd;
       const cx=Math.floor(b.x/T),cy=Math.floor(b.y/T),g=inb(cx,cy)?grid[idx(cx,cy)]:1;
-      if(g){b.dead=true;const a=Math.atan2(-b.dy,-b.dx);
-        if(g===1)emit('wl',b.x,b.y,a,b.id);
-        else{const k=idx(cx,cy);chp[k]--;emit('cr',b.x,b.y,a,b.id);
-          if(chp[k]<=0){grid[k]=0;broken.push({x:cx,y:cy,t:25});emit('cb',(cx+.5)*T,(cy+.5)*T)}
-          crD.push(k)}
+      if(g){const a=Math.atan2(-b.dy,-b.dx),k=g===2?idx(cx,cy):-1;
+        if(g===2&&b.pc){if(b.lc!==k){b.lc=k;hitCrate(k,cx,cy,b.x,b.y,a,-1)}continue}   /* railgun cuts through crates */
+        if(b.bn>0){const px=b.x-b.dx*sd,py=b.y-b.dy*sd,fx=Math.floor(px/T)!==cx,fy=Math.floor(py/T)!==cy;   /* ricochet */
+          if(g===2)hitCrate(k,cx,cy,b.x,b.y,a,-1);else emit('wl',b.x,b.y,a,-1);
+          if(fx||!fy)b.dx=-b.dx;if(fy||!fx)b.dy=-b.dy;b.x=px;b.y=py;b.bn--;continue}
+        b.dead=true;
+        if(g===1)emit('wl',b.x,b.y,a,b.id);else hitCrate(k,cx,cy,b.x,b.y,a,b.id);
         return}
       for(const t of tanks){
         if(!t.alive||t===b.owner||t.team===b.owner.team)continue;
         const rx=b.x-t.x,ry=b.y-t.y,c=Math.cos(t.a),s=Math.sin(t.a),lx=rx*c+ry*s,ly=-rx*s+ry*c;
-        if(Math.abs(lx)<33&&Math.abs(ly)<26){b.dead=true;dmg(t,b.owner,BDMG,0,b.x,b.y,Math.atan2(-b.dy,-b.dx),b.id);return}
+        if(Math.abs(lx)<33&&Math.abs(ly)<26){
+          if(b.pc){if(b.hit.indexOf(t.slot)<0){b.hit.push(t.slot);dmg(t,b.owner,BDMG,0,b.x,b.y,Math.atan2(-b.dy,-b.dx),-1)}continue}   /* railgun pierces tanks */
+          b.dead=true;dmg(t,b.owner,BDMG,0,b.x,b.y,Math.atan2(-b.dy,-b.dx),b.id);return}
       }
     }
   }
   function fire(t){
-    const c=Math.cos(t.ta),s=Math.sin(t.ta),b={id:nextBid,x:t.x+c*14,y:t.y+s*14,dx:c,dy:s,owner:t,life:1.1,dead:false};
-    nextBid=nextBid%9999+1;
-    emit('sp2',t.x+c*48,t.y+s*48,t.ta,t.slot,b.id);   // shot event first: the client spawns its bullet from it
-    moveBullet(b,34);if(!b.dead)bullets.push(b);
-    t.cd=RELOAD*(t.fx.rate>0?.5:1);
+    const n=t.fx.spread>0?3:1,pc=t.fx.pierce>0;
+    for(let j=0;j<n;j++){
+      const an=t.ta+(n===3?(j-1)*.18:0),c=Math.cos(an),s=Math.sin(an);
+      const b={id:nextBid,x:t.x+c*14,y:t.y+s*14,dx:c,dy:s,owner:t,life:1.1,dead:false,bn:t.fx.bounce>0?2:0,pc,lc:-1,hit:pc?[]:null};
+      nextBid=nextBid%9999+1;
+      emit('sp2',t.x+c*48,t.y+s*48,an,t.slot,b.id);   // shot event first: the client spawns its bullet from it
+      moveBullet(b,34);if(!b.dead)bullets.push(b);
+    }
+    t.cd=RELOAD*(t.fx.rate>0?.5:1)*(n===3?1.5:1);
   }
   function stepTank(t,dt,live){
     if(!t.alive){if(live){t.respawnT-=dt;if(t.respawnT<=0)respawn(t)}return}
@@ -237,7 +261,7 @@ function Engine(io){
     if(!live){i.thrust=i.turn=0;i.vec=false;i.mag=0;i.fire=false}
     if(t.fx.lock>0){const g=lockTarget(t);if(g)i.aim=aimAt(t,g)}
     moveTank(t,dt,fxMul(t));
-    if(live&&i.fire&&t.cd<=0)fire(t);
+    if(live&&i.fire&&t.cd<=0&&!(t.fx.jam>0))fire(t);
     if(t.fx.regen>0){t.regenT-=dt;if(t.regenT<=0){t.regenT=7.5;if(t.regenLeft>0&&t.hp<MAXHP){t.hp++;t.regenLeft--;emit('hl',t.x,t.y,0,t.slot)}}}
     if(t.fx.poison>0){t.poisonT-=dt;if(t.poisonT<=0){t.poisonT=2;if(t.hp>1){t.hp--;emit('ht',t.x,t.y,0,t.slot)}}}
     if(i.dp!==t.dpSeen){t.dpSeen=i.dp;if(live&&t.traps.length)deployTrap(t)}
@@ -253,7 +277,7 @@ function Engine(io){
     const B=t.brain,i=t.inp;i.vec=true;i.fire=false;B.think-=dt;B.react-=dt;B.dpT-=dt;
     if(B.think<=0){
       B.think=.25+Math.random()*.2;B.err=(Math.random()-.5)*B.sloppy;let best=null,bd=1e9;
-      for(const o of tanks){if(o===t||!o.alive||o.team===t.team)continue;const d=Math.hypot(o.x-t.x,o.y-t.y);if(d<bd&&d<950&&los(t,o)){best=o;bd=d}}
+      for(const o of tanks){if(o===t||!o.alive||o.team===t.team)continue;const d=Math.hypot(o.x-t.x,o.y-t.y);if(o.fx.cloak>0&&d>320)continue;if(d<bd&&d<950&&los(t,o)){best=o;bd=d}}
       if(best&&best!==B.target)B.react=rnd(.25,.6);B.target=best;
     }
     if(t.traps.length&&B.dpT<=0&&Math.random()<.03){i.dp++;B.dpT=rnd(3,7)}
@@ -315,7 +339,7 @@ function Engine(io){
     if(live){
       for(let i=items.length-1;i>=0;i--){const it=items[i];
         for(const t of tanks){if(!t.alive||Math.hypot(t.x-it.x,t.y-it.y)>40)continue;
-          if(it.type<5)applyPerk(t,it.type);else if(t.traps.length<3)t.traps.push(it.type);else continue;
+          if(isPerk(it.type))applyPerk(t,it.type);else if(t.traps.length<3)t.traps.push(it.type);else continue;
           emit('pk',it.x,it.y,it.type,t.slot);items.splice(i,1);break}}
       for(let i=traps.length-1;i>=0;i--){const tr=traps[i];tr.arm-=dt;if(tr.arm>0)continue;
         for(const t of tanks){if(!t.alive||t.team===tr.team)continue;if(Math.hypot(t.x-tr.x,t.y-tr.y)<36){triggerTrap(tr,t);break}}}
@@ -456,6 +480,14 @@ function Engine(io){
     else if(k==='t')switchTeam(cid,n);
     else if(k==='s'){if(own&&G.ph===0){const why=canStart();if(why)say(cid,why);else startMatch()}}
     else if(k==='v')vote(cid,n);
+    else if(k==='q')emote(cid,c,n);
+  }
+  /* q|n quick comms: relayed only to the sender's own team (never in free for all) */
+  function emote(cid,c,n){
+    if(!(G.ph===1||G.ph===2)||!md().teams||n<0||n>5)return;
+    if(c.qT&&tickN-c.qT<16)return;c.qT=tickN||1;
+    const i=slotOf(cid);if(i<0)return;const tm=ROOM.slots[i].team,m='q|'+i+'|'+n;
+    clients.forEach((v,id)=>{const j=slotOf(id);if(j>=0&&ROOM.slots[j].team===tm)io.to(id,m)});
   }
   function tick(now){
     if(!lastMs)lastMs=now;let dt=(now-lastMs)/1000;lastMs=now;if(!(dt>0))dt=0;if(dt>.25)dt=.25;
